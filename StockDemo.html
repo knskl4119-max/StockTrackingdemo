@@ -7,32 +7,56 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- Firebase Compat SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
   <style>
     * { box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #f0f2f5; color: #333; }
-    .container { max-width: 900px; margin: 0 auto; }
+    
+    /* 全体の最大幅を 900px から 1400px に広げました */
+    .container { max-width: 1400px; margin: 0 auto; } 
+    
     .card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .form-group { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
     input, button { padding: 10px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
     input { flex: 1; min-width: 130px; }
     button { background: #0066cc; color: #fff; border: none; cursor: pointer; font-weight: bold; }
     button:hover { background: #0052a3; }
-    .stock-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 20px; }
+    
+    /* カードの最小幅を 380px から 300px に縮め、横に並びやすくしました */
+    .stock-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+    
     .stock-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 8px; }
     .profit { color: #d93025; font-weight: bold; }
     .loss { color: #188038; font-weight: bold; }
     .chart-container { position: relative; height: 220px; width: 100%; margin-top: 15px; }
+    #loginSection { max-width: 400px; margin: 100px auto; text-align: center; }
+    #loginSection input { width: 100%; margin-bottom: 15px; }
+    #loginSection button { width: 100%; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>株価・損益共有ダッシュボード</h1>
+
+  <!-- ログイン画面 -->
+  <div id="loginSection" class="card">
+    <h2>ログイン</h2>
+    <p style="font-size: 13px; color: #666;">Firebaseで登録したアカウントを入力してください</p>
+    <input type="email" id="email" placeholder="メールアドレス">
+    <input type="password" id="password" placeholder="パスワード">
+    <button onclick="login()">ログイン</button>
+  </div>
+
+  <!-- アプリ本体 -->
+  <div id="appSection" class="container" style="display: none;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+      <h1 style="margin: 0;">株価・損益共有ダッシュボード</h1>
+      <button onclick="logout()" style="background:#6c757d; padding: 8px 16px;">ログアウト</button>
+    </div>
 
     <div class="card">
       <h3>新規銘柄の登録</h3>
       <div class="form-group">
-        <input type="text" id="symbol" placeholder="銘柄コード (例: AAPL, 7203.T)">
+        <input type="text" id="symbol" placeholder="銘柄コード (例: 1721.T)">
         <input type="number" id="purchasePrice" placeholder="購入価格" step="any">
         <input type="date" id="purchaseDate">
         <button onclick="addStock()">登録</button>
@@ -43,12 +67,6 @@
   </div>
 
   <script>
-    // ここに以下のJavaScriptコードを配置する
-  </script>
-</body>
-</html>
-
-// 1. Firebaseコンソールで取得した設定情報に差し替え
     const firebaseConfig = {
       apiKey: "AIzaSyC5WHaBSLboJ_FI81NKBzhFIEz5XUdAvko",
       authDomain: "kabudemo-55871.firebaseapp.com",
@@ -60,68 +78,114 @@
     };
 
     firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
     const db = firebase.database();
     const charts = {};
 
-    // 2. 銘柄追加処理
-    function addStock() {
-      const symbol = document.getElementById('symbol').value.trim().toUpperCase();
-      const price = parseFloat(document.getElementById('purchasePrice').value);
-      const date = document.getElementById('purchaseDate').value;
+    auth.onAuthStateChanged((user) => {
+      if (user) {
+        document.getElementById('loginSection').style.display = 'none';
+        document.getElementById('appSection').style.display = 'block';
+        startDatabaseListener();
+      } else {
+        document.getElementById('loginSection').style.display = 'block';
+        document.getElementById('appSection').style.display = 'none';
+        document.getElementById('stockList').innerHTML = '';
+        db.ref('stocks').off();
+      }
+    });
 
-      if (!symbol || isNaN(price) || !date) {
-        alert("すべての項目を入力してください");
+    function login() {
+      const email = document.getElementById('email').value;
+      const pass = document.getElementById('password').value;
+      
+      if (!email || !pass) {
+        alert("メールアドレスとパスワードを入力してください");
         return;
       }
 
-      db.ref('stocks').push({
-        symbol: symbol,
-        purchasePrice: price,
-        purchaseDate: date,
-        createdAt: firebase.database.ServerValue.TIMESTAMP
-      });
-
-      document.getElementById('symbol').value = '';
-      document.getElementById('purchasePrice').value = '';
-      document.getElementById('purchaseDate').value = '';
+      auth.signInWithEmailAndPassword(email, pass)
+        .catch((error) => alert("ログイン失敗: " + error.message));
     }
 
-    // 3. 銘柄削除処理
+    function logout() {
+      auth.signOut();
+    }
+
+    function addStock() {
+      const symbolInput = document.getElementById('symbol').value.trim().toUpperCase();
+      const price = parseFloat(document.getElementById('purchasePrice').value);
+      const date = document.getElementById('purchaseDate').value;
+
+      if (!symbolInput || isNaN(price) || !date) {
+        alert("銘柄コード、購入価格、購入日は必須です");
+        return;
+      }
+
+      // ドットをアンダースコアに変換して検索用キーを作成 (例: 1721.T -> 1721_T)
+      const dictKey = symbolInput.replace('.', '_');
+
+      // Firebaseから企業名を検索
+      db.ref(`company_dict/${dictKey}`).once('value').then((snapshot) => {
+        const companyName = snapshot.val() || ""; // 辞書になければ空欄
+
+        // stocksに保存
+        return db.ref('stocks').push({
+          symbol: symbolInput,
+          companyName: companyName,
+          purchasePrice: price,
+          purchaseDate: date,
+          createdAt: firebase.database.ServerValue.TIMESTAMP
+        });
+      }).then(() => {
+        document.getElementById('symbol').value = '';
+        document.getElementById('purchasePrice').value = '';
+        document.getElementById('purchaseDate').value = '';
+      }).catch((error) => {
+        alert("保存失敗: \n" + error.message);
+      });
+    }
+
     function deleteStock(id) {
       if (confirm("この銘柄を削除しますか？")) {
         db.ref(`stocks/${id}`).remove();
       }
     }
 
-    // 4. Realtime Databaseの同期と描画更新
-    db.ref('stocks').on('value', (snapshot) => {
-      const data = snapshot.val();
-      const listContainer = document.getElementById('stockList');
-      listContainer.innerHTML = '';
+    function startDatabaseListener() {
+      db.ref('stocks').on('value', (snapshot) => {
+        const data = snapshot.val();
+        const listContainer = document.getElementById('stockList');
+        listContainer.innerHTML = '';
 
-      // チャートインスタンスの破棄
-      Object.keys(charts).forEach(key => {
-        if (charts[key]) charts[key].destroy();
+        Object.keys(charts).forEach(key => {
+          if (charts[key]) charts[key].destroy();
+        });
+
+        if (!data) return;
+
+        Object.keys(data).forEach(key => {
+          renderCard(key, data[key]);
+        });
       });
+    }
 
-      if (!data) return;
-
-      Object.keys(data).forEach(key => {
-        renderCard(key, data[key]);
-      });
-    });
-
-    // 5. 各銘柄カードのHTML追加
     function renderCard(key, item) {
       const listContainer = document.getElementById('stockList');
       const card = document.createElement('div');
       card.className = 'card';
+      
+      // 企業名が存在する場合は括弧付きで表示、米国株など辞書にない場合はコードのみ表示
+      const displayName = item.companyName ? 
+        `${item.companyName} <span style="font-size:14px; font-weight:normal; color:#666;">(${item.symbol})</span>` : 
+        item.symbol;
+
       card.innerHTML = `
         <div class="stock-header">
-          <h4>${item.symbol}</h4>
+          <h4 style="margin: 0;">${displayName}</h4>
           <button onclick="deleteStock('${key}')" style="background:#dc3545; padding:4px 8px; font-size:12px; color:#fff; border:none; border-radius:4px; cursor:pointer;">削除</button>
         </div>
-        <p>購入日: ${item.purchaseDate} | 取得単価: ${item.purchasePrice}</p>
+        <p style="margin-top: 10px;">購入日: ${item.purchaseDate} | 取得単価: ${item.purchasePrice}</p>
         <p>現在値: <span id="current-${key}">取得中...</span></p>
         <p>損益: <span id="profit-${key}">-</span></p>
         <div class="chart-container">
@@ -133,27 +197,25 @@
       loadStockHistory(key, item.symbol, item.purchaseDate, item.purchasePrice);
     }
 
-    // 6. 株価データの取得と Chart.js による描画 (Yahoo Finance 連携版)
     async function loadStockHistory(key, symbol, purchaseDate, purchasePrice) {
       const pDate = new Date(purchaseDate);
       const startDate = new Date(pDate);
-      startDate.setMonth(startDate.getMonth() - 1); // 購入1か月前
+      startDate.setMonth(startDate.getMonth() - 1); 
       const startTimestamp = Math.floor(startDate.getTime() / 1000);
 
       try {
-        // Yahoo Financeのチャート用API (過去3ヶ月分の日次データを要求)
-        const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=3mo&interval=1d`;
-        // CORS制限を回避するためのプロキシサーバーを経由
-        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
-
-        const response = await fetch(proxyUrl);
-        if (!response.ok) throw new Error("ネットワークエラー");
+        const gasUrl = "https://script.google.com/macros/s/AKfycbyFzb0LCot0wHo3evBbBP-n679LfchQqcA2nZWZHg79jgiyZ62kNPbhRhsUwb4SG843mQ/exec";
+        const proxyUrl = `${gasUrl}?symbol=${symbol}`;
         
-        const proxyData = await response.json();
-        const rawData = JSON.parse(proxyData.contents); // プロキシの中身をパース
+        const response = await fetch(proxyUrl);
+        if (!response.ok) {
+          throw new Error(`通信拒否 (${response.status})`);
+        }
+        
+        const rawData = await response.json();
 
-        if (!rawData.chart.result) {
-          throw new Error("銘柄が見つからないか、データが取得できません");
+        if (!rawData.chart || !rawData.chart.result) {
+          throw new Error("銘柄データ無効");
         }
 
         const result = rawData.chart.result[0];
@@ -163,36 +225,43 @@
         const dates = [];
         const prices = [];
 
-        // 取得したデータから、購入1ヶ月前以降のデータを抽出
         for (let i = 0; i < timestamps.length; i++) {
           if (closePrices[i] !== null && timestamps[i] >= startTimestamp) {
             const dateObj = new Date(timestamps[i] * 1000);
             dates.push(dateObj.toISOString().split('T')[0]);
-            prices.push(parseFloat(closePrices[i].toFixed(2))); // 小数点2桁に丸める
+            prices.push(parseFloat(closePrices[i].toFixed(2))); 
           }
         }
 
-        if (prices.length === 0) throw new Error("有効な期間のデータがありません");
+        if (prices.length === 0) throw new Error("期間データなし");
 
-        // 現在値（配列の最後の値）と損益の計算
         const currentPrice = prices[prices.length - 1];
         const diff = currentPrice - purchasePrice;
         const profitRatio = ((diff / purchasePrice) * 100).toFixed(2);
 
-        // UI表示の更新
-        document.getElementById(`current-${key}`).innerText = currentPrice;
+        const currentEl = document.getElementById(`current-${key}`);
         const profitEl = document.getElementById(`profit-${key}`);
+        const canvasId = `chart-${key}`;
+        const canvasEl = document.getElementById(canvasId);
+
+        if (!currentEl || !profitEl || !canvasEl) return;
+
+        currentEl.innerText = currentPrice;
         profitEl.innerText = `${diff >= 0 ? '+' : ''}${diff.toFixed(2)} (${profitRatio}%)`;
         profitEl.className = diff >= 0 ? 'profit' : 'loss';
 
-        // チャート描画
-        const ctx = document.getElementById(`chart-${key}`).getContext('2d');
+        const existingChart = Chart.getChart(canvasId);
+        if (existingChart) {
+          existingChart.destroy();
+        }
+
+        const ctx = canvasEl.getContext('2d');
         charts[key] = new Chart(ctx, {
           type: 'line',
           data: {
             labels: dates,
             datasets: [{
-              label: `${symbol} 株価推移 (購入前1か月〜現在)`,
+              label: `${symbol} 株価推移`,
               data: prices,
               borderColor: '#0066cc',
               backgroundColor: 'rgba(0, 102, 204, 0.05)',
@@ -212,7 +281,13 @@
         });
 
       } catch (err) {
-        document.getElementById(`current-${key}`).innerText = "データ取得失敗";
+        const currentEl = document.getElementById(`current-${key}`);
+        if (currentEl) {
+          currentEl.innerText = `エラー: ${err.message}`;
+        }
         console.error("Fetch Error:", err);
       }
     }
+  </script>
+</body>
+</html>
